@@ -100,11 +100,37 @@ static LONG WINAPI crash_handler(EXCEPTION_POINTERS* ep)
  * -----------------------------------------------------------------------*/
 #ifdef _WIN32
 extern "C" const char* duck_resolve_host_rip(void* rip, uint32_t* out_guest);
+extern "C" uint32_t vm_read32(uint64_t addr);
 static HANDLE g_main_thread = NULL;
+volatile ppu_context* g_dbg_ctx = nullptr;   /* live main-thread registers */
+
+/* When the main thread is stuck in the dlmalloc tree-bin search (func_009653C0),
+ * dump the arena + the tree node chain to see whether the child pointers cycle
+ * (corruption) or the arena is uninitialized garbage. */
+static void dump_malloc_tree(void)
+{
+    if (!g_dbg_ctx) return;
+    uint32_t arena = (uint32_t)g_dbg_ctx->gpr[26];
+    uint32_t node  = (uint32_t)g_dbg_ctx->gpr[8];
+    uint32_t req   = (uint32_t)g_dbg_ctx->gpr[30];
+    fprintf(stderr, "[heap] arena=0x%08X reqsize=0x%X cur_node=0x%08X\n", arena, req, node);
+    uint32_t n = node, seen[12]; int ns = 0;
+    for (int i = 0; i < 12 && n; i++) {
+        uint32_t head = vm_read32(n + 0x4);
+        uint32_t c0   = vm_read32(n + 0x10);
+        uint32_t c1   = vm_read32(n + 0x14);
+        fprintf(stderr, "[heap]   node 0x%08X: head=0x%08X child[0]=0x%08X child[1]=0x%08X\n",
+                n, head, c0, c1);
+        for (int j = 0; j < ns; j++) if (seen[j] == n) { fprintf(stderr, "[heap]   ^^ CYCLE back to a visited node\n"); return; }
+        seen[ns++] = n;
+        n = c0 ? c0 : c1;   /* descend */
+    }
+}
 
 static DWORD WINAPI watchdog_proc(LPVOID)
 {
     HMODULE exe = GetModuleHandleA(NULL);
+    int dumped = 0;
     for (int i = 0; i < 60; i++) {
         Sleep(2000);
         if (!g_main_thread) continue;
@@ -121,6 +147,7 @@ static DWORD WINAPI watchdog_proc(LPVOID)
             fprintf(stderr, "[watchdog] t=%ds main RIP=exe+0x%llX  guest=%s (0x%08X)\n",
                     (i + 1) * 2, (unsigned long long)(c.Rip - (uintptr_t)exe),
                     nm ? nm : "?", guest);
+            if (guest == 0x009653C0 && dumped < 3) { dump_malloc_tree(); dumped++; }
             fflush(stderr);
         }
     }
@@ -213,6 +240,7 @@ int main(int argc, char* argv[])
            DUCK_START_CODE, DUCK_TOC);
 
 #ifdef _WIN32
+    g_dbg_ctx = &ctx;
     start_watchdog();
     __try {
 #endif
