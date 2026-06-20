@@ -100,9 +100,28 @@ static LONG WINAPI crash_handler(EXCEPTION_POINTERS* ep)
  * -----------------------------------------------------------------------*/
 #ifdef _WIN32
 extern "C" const char* duck_resolve_host_rip(void* rip, uint32_t* out_guest);
+extern "C" uint32_t duck_resolve_guest(uint32_t addr);
 extern "C" uint32_t vm_read32(uint64_t addr);
 static HANDLE g_main_thread = NULL;
 volatile ppu_context* g_dbg_ctx = nullptr;   /* live main-thread registers */
+
+/* Walk the guest stack back-chain and print the LR call chain (who called the
+ * spinning malloc). PPC64: *(sp) = caller sp; saved LR at caller_sp+0x10. */
+static void dump_guest_callchain(void)
+{
+    if (!g_dbg_ctx) return;
+    uint32_t sp = (uint32_t)g_dbg_ctx->gpr[1];
+    fprintf(stderr, "[heap] call chain (LR=0x%08X -> func_%08X):\n",
+            (uint32_t)g_dbg_ctx->lr, duck_resolve_guest((uint32_t)g_dbg_ctx->lr));
+    for (int i = 0; i < 14 && sp && sp < 0xFFFF0000u; i++) {
+        uint32_t next = vm_read32(sp);
+        uint32_t lr   = vm_read32(next + 0x10);
+        if (!lr) { if (!next || next <= sp) break; sp = next; continue; }
+        fprintf(stderr, "[heap]   #%d LR=0x%08X -> func_%08X\n", i, lr, duck_resolve_guest(lr));
+        if (next <= sp) break;
+        sp = next;
+    }
+}
 
 /* When the main thread is stuck in the dlmalloc tree-bin search (func_009653C0),
  * dump the arena + the tree node chain to see whether the child pointers cycle
@@ -147,7 +166,7 @@ static DWORD WINAPI watchdog_proc(LPVOID)
             fprintf(stderr, "[watchdog] t=%ds main RIP=exe+0x%llX  guest=%s (0x%08X)\n",
                     (i + 1) * 2, (unsigned long long)(c.Rip - (uintptr_t)exe),
                     nm ? nm : "?", guest);
-            if (guest == 0x009653C0 && dumped < 3) { dump_malloc_tree(); dumped++; }
+            if (guest == 0x009653C0 && dumped < 2) { dump_malloc_tree(); dump_guest_callchain(); dumped++; }
             fflush(stderr);
         }
     }

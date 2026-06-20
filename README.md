@@ -100,6 +100,23 @@ cmake --build build -j 6
 
 ## 📜 Changelog
 
+### v0.1.3 — "Oracle" (2026-06-20)
+- 🔮 Booted the same EBOOT in **RPCS3** (the oracle) and mapped the real heap
+  bring-up: the CRT heap is created via `sys_memory_allocate(size=0x200000)` then
+  `sys_memory_allocate(0xa500000)` (the 165 MB pool) — and the real boot is
+  **PRX-driven** (it `_sys_prx_load_module`s liblv2/libsysmodule/cellGcm/…).
+- 🩺 Diagnosis (watchdog + memory/callchain dumps): our boot never calls
+  `sys_memory_allocate` — the heap-init function (`func_0025ED40`) is never
+  reached, so `malloc` runs on a NULL mspace and spins. The CRT init
+  (`func_00270448`) *does* run (`cellGameBootCheck` etc.), but skips heap
+  creation.
+- ✅ Real `cellGameBootCheck` + `cellGameContentPermit` bridges (disc-boot
+  values: type=DISC, attributes=0, content paths) — verified against the oracle.
+- 🔭 Reusable diagnostics: guest-address resolver + guest stack-chain walk in the
+  watchdog.
+- 🔜 Next: trace why `func_00270448` skips the heap-init call (ordering/branch),
+  so the mspace gets created and the pool `malloc` succeeds.
+
 ### v0.1.2 — "Shift Happens" (2026-06-20)
 - 🐛 **Lifter bug fixed (`slw`/`srw`/`sraw`):** the 32-bit shift-word ops emitted
   `(uint32_t)x << (n & 0x3F)`, but PPC produces 0 when the shift ≥ 32. C `<< n`

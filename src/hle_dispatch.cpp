@@ -25,6 +25,8 @@ extern "C" const char* duck_import_name_for_sentinel(uint32_t sentinel);
 extern "C" uint8_t* vm_base;
 extern "C" uint32_t vm_read32(uint64_t addr);
 extern "C" void     vm_write64(uint64_t addr, uint64_t val);
+extern "C" void     vm_write32(uint64_t addr, uint32_t val);
+extern "C" void     vm_write8 (uint64_t addr, uint8_t  val);
 
 /* ppu_context HLE handler type. */
 typedef void (*hle_fn)(ppu_context*);
@@ -90,6 +92,45 @@ static void bridge_sys_time_get_system_time(ppu_context* ctx)
     static uint64_t t = 1000000;
     t += 16667;
     ctx->gpr[3] = t;
+}
+
+/* ---------------------------------------------------------------------------
+ * cellGame — boot/content checks. cellGameBootCheck writes type/attributes/
+ * size/dirName, and the CRT init (func_00270448) branches on `attributes`;
+ * a CELL_OK-but-write-nothing stub leaves garbage there and the init skips
+ * heap creation. Provide real disc-boot values (verified against RPCS3).
+ * -----------------------------------------------------------------------*/
+#define CELL_GAME_GAMETYPE_DISC   1
+#define CELL_GAME_SIZEKB_NOTCALC  (-1)
+
+static void bridge_cellGameBootCheck(ppu_context* ctx)
+{
+    uint32_t type_p = (uint32_t)ctx->gpr[3];
+    uint32_t attr_p = (uint32_t)ctx->gpr[4];
+    uint32_t size_p = (uint32_t)ctx->gpr[5];
+    uint32_t dir_p  = (uint32_t)ctx->gpr[6];
+    if (type_p) vm_write32(type_p, CELL_GAME_GAMETYPE_DISC);
+    if (attr_p) vm_write32(attr_p, 0);                       /* no attributes */
+    if (size_p) {                                            /* CellGameContentSize */
+        vm_write32(size_p + 0, 0x1000000);                  /* hddFreeSizeKB (~16 GB) */
+        vm_write32(size_p + 4, (uint32_t)CELL_GAME_SIZEKB_NOTCALC);
+        vm_write32(size_p + 8, 0);                          /* sysSizeKB */
+    }
+    if (dir_p) vm_write8(dir_p, 0);                          /* disc: empty dirName */
+    fprintf(stderr, "[HLE] cellGameBootCheck -> DISC (type=1, attr=0)\n");
+    ctx->gpr[3] = 0;
+}
+
+static void bridge_cellGameContentPermit(ppu_context* ctx)
+{
+    /* contentInfoPath (r3), usrdirPath (r4) — fill with the disc paths. */
+    uint32_t ci_p = (uint32_t)ctx->gpr[3];
+    uint32_t ud_p = (uint32_t)ctx->gpr[4];
+    const char* ci = "/dev_bdvd/PS3_GAME";
+    const char* ud = "/dev_bdvd/PS3_GAME/USRDIR";
+    if (ci_p) for (const char* s = ci; ; s++) { vm_write8(ci_p++, (uint8_t)*s); if (!*s) break; }
+    if (ud_p) for (const char* s = ud; ; s++) { vm_write8(ud_p++, (uint8_t)*s); if (!*s) break; }
+    ctx->gpr[3] = 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -167,6 +208,10 @@ extern "C" void duck_register_hle_modules(void)
     reg("sys_ppu_thread_exit",      (void*)bridge_sys_ppu_thread_exit);
     reg("sys_ppu_thread_get_id",    (void*)bridge_sys_ppu_thread_get_id);
     reg("sys_time_get_system_time", (void*)bridge_sys_time_get_system_time);
+
+    /* cellGame — real boot-check values so the CRT init reaches heap creation. */
+    reg("cellGameBootCheck",        (void*)bridge_cellGameBootCheck);
+    reg("cellGameContentPermit",    (void*)bridge_cellGameContentPermit);
 
     ps3_module_load(&mod_duck);
     ps3_register_module(&mod_duck);

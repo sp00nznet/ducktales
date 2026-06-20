@@ -87,6 +87,16 @@ extern "C" void dispatch_register_external(uint32_t addr, void (*fn)(void*)) {
     dispatch_put(addr, fn);
 }
 
+/* Resolve a GUEST address to the nearest function start at/below it. */
+extern "C" uint32_t duck_resolve_guest(uint32_t addr) {
+    uint32_t best = 0;
+    for (uint64_t i = 0; i < function_table_count; i++) {
+        uint32_t a = (uint32_t)function_table[i].addr;
+        if (a <= addr && a > best) best = a;
+    }
+    return best;
+}
+
 /* Resolve a host RIP to the nearest guest function at/below it (linear scan of
  * function_table). Used by the watchdog to report where a thread is spinning.
  * Returns the function name and, via out_guest, its guest address; nullptr if
