@@ -18,12 +18,16 @@ This is the **second** ps3recomp title (after [flOw](https://github.com/sp00nzne
 | Build & link | ✅ **1.65 GB native x86-64 executable** |
 | Boot / CRT startup | ✅ enters recompiled `_start`, runs the game's own C++ constructors |
 | Firmware imports (NID) | ✅ all 239 wired through the PS3 import-table model |
-| Game init sequence | ✅ reaches `cellGameBootCheck`, module loads, **thread creation**, SPURS, net, NP init |
-| Worker threads | 🔜 `sys_ppu_thread_create` stubbed → main thread spins waiting on a worker |
+| Game init sequence | ✅ reaches `cellGameBootCheck`, module loads, SPURS, net, NP init |
+| TLS + thread bridges | ✅ real `sys_initialize_tls` (from PT_TLS) + real `sys_ppu_thread_create` |
+| C++ global constructors | ✅ runs through the `__do_global_ctors` table |
+| CRT heap / `malloc` | 🔜 stuck in the allocator's free-list walk — heap not brought up yet |
 | Graphics (RSX → D3D12/Vulkan) | 🔜 not started |
 | Audio / input | 🔜 not started |
 
-**Where it stands today:** the boot thread sails through the *entire* early-init sequence and then parks in a `sys_timer`/mutex wait loop — it's waiting on a worker thread that hasn't been spawned for real yet. That's the next domino.
+**Where it stands today:** boot enters the recompiled `_start`, sets up TLS, and runs the C++ global constructors — which fire the real game-init calls (`cellGameBootCheck`, module loads, SPURS/net/NP). It now reaches the **CRT heap allocator** and spins in a best-fit free-list search (`func_009653C0`) because the heap's free list was never initialized (no `sys_memory_allocate` yet). CRT heap bring-up is the next frontier.
+
+A built-in **spin watchdog** periodically samples the main thread's PC and resolves it to a guest function, so a silent hang becomes a named address to chase. That's how each of the blockers below was found.
 
 ---
 
@@ -95,6 +99,20 @@ cmake --build build -j 6
 ---
 
 ## 📜 Changelog
+
+### v0.1.1 — "Constructors & Threads" (2026-06-20)
+- 🧵 Real `sys_ppu_thread_create`/`exit` (delegate to the runtime; entry OPD
+  resolved by the thread trampoline) + a moving `sys_time_get_system_time`.
+- 🧠 Real `sys_initialize_tls` driven from the ELF's **PT_TLS** template
+  (`0xD1B224`, `0x1E8` bytes) — the real ABI passes the thread_id in `r3`, not
+  the template address, so the template must come from PT_TLS. Setting a valid
+  `r13` let the C++ constructors run for real and broke past the ctor-walk spin.
+- 🔭 Added a **spin watchdog**: samples the main thread's RIP and maps it to the
+  nearest guest function. Turns silent hangs into named PCs.
+- 🐛 Import sentinels now resolve via an O(1) range check instead of the 50K-entry
+  hash table (they were being lost in long probe chains).
+- 🐛 4 GB-boundary guard page for guest pointers near `0xFFFFFFFF`.
+- 🔜 Next: bring up the CRT heap so `malloc` stops spinning on an empty free list.
 
 ### v0.1.0 — "First Boot" (2026-06-20)
 - 🎉 **It compiles and boots.** 50,077 functions lifted, 1.65 GB native exe.

@@ -93,6 +93,48 @@ static LONG WINAPI crash_handler(EXCEPTION_POINTERS* ep)
 }
 #endif
 
+/* ---------------------------------------------------------------------------
+ * Spin watchdog: a few seconds in, periodically suspend the main thread and
+ * report the guest function its RIP sits in. Turns a silent hang into a known
+ * PC so we can see exactly where the boot is stuck.
+ * -----------------------------------------------------------------------*/
+#ifdef _WIN32
+extern "C" const char* duck_resolve_host_rip(void* rip, uint32_t* out_guest);
+static HANDLE g_main_thread = NULL;
+
+static DWORD WINAPI watchdog_proc(LPVOID)
+{
+    HMODULE exe = GetModuleHandleA(NULL);
+    for (int i = 0; i < 60; i++) {
+        Sleep(2000);
+        if (!g_main_thread) continue;
+        /* Suspend only long enough to read RIP, then RESUME before doing any
+         * fprintf — printing while the main thread is suspended inside the CRT
+         * lock (e.g. mid-fprintf) would deadlock the watchdog. */
+        CONTEXT c; c.ContextFlags = CONTEXT_CONTROL;
+        SuspendThread(g_main_thread);
+        BOOL ok = GetThreadContext(g_main_thread, &c);
+        ResumeThread(g_main_thread);
+        if (ok) {
+            uint32_t guest = 0;
+            const char* nm = duck_resolve_host_rip((void*)c.Rip, &guest);
+            fprintf(stderr, "[watchdog] t=%ds main RIP=exe+0x%llX  guest=%s (0x%08X)\n",
+                    (i + 1) * 2, (unsigned long long)(c.Rip - (uintptr_t)exe),
+                    nm ? nm : "?", guest);
+            fflush(stderr);
+        }
+    }
+    return 0;
+}
+
+static void start_watchdog(void)
+{
+    DuplicateHandle(GetCurrentProcess(), GetCurrentThread(),
+                    GetCurrentProcess(), &g_main_thread, 0, FALSE, DUPLICATE_SAME_ACCESS);
+    CreateThread(NULL, 0, watchdog_proc, NULL, 0, NULL);
+}
+#endif
+
 static void commit_regions(void)
 {
     /* Low + ELF region (code 0x10000.., data 0xCF0000.., BSS) */
@@ -171,6 +213,7 @@ int main(int argc, char* argv[])
            DUCK_START_CODE, DUCK_TOC);
 
 #ifdef _WIN32
+    start_watchdog();
     __try {
 #endif
         ps3_trampoline_run(&ctx, (void(*)(void*))func_00251F98);

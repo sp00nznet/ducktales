@@ -32,6 +32,12 @@
 
 #define DUCK_STACK_SIZE     (1024 * 1024)   /* main-thread guest stack (1 MB) */
 
+/* PT_TLS template (from EBOOT.elf program headers) — the authoritative source
+ * for thread-local storage init, independent of the sys_initialize_tls ABI. */
+#define DUCK_TLS_VADDR      0x00D1B224u
+#define DUCK_TLS_FILESZ     0x1E8u
+#define DUCK_TLS_MEMSZ      0x1E8u
+
 #define DUCK_WINDOW_WIDTH   1280
 #define DUCK_WINDOW_HEIGHT  720
 #define DUCK_WINDOW_TITLE   "DuckTales: Remastered (ps3recomp)"

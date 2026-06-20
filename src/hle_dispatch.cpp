@@ -15,13 +15,82 @@
 #include "recomp/ppu_recomp.h"
 #include "ps3emu/module.h"
 #include "ps3emu/nid.h"
+#include "config.h"
 #include <cstdio>
+#include <cstring>
 
 extern "C" uint32_t    duck_import_nid_for_sentinel(uint32_t sentinel);
 extern "C" const char* duck_import_name_for_sentinel(uint32_t sentinel);
 
+extern "C" uint8_t* vm_base;
+extern "C" uint32_t vm_read32(uint64_t addr);
+extern "C" void     vm_write64(uint64_t addr, uint64_t val);
+
 /* ppu_context HLE handler type. */
 typedef void (*hle_fn)(ppu_context*);
+
+/* ===========================================================================
+ * Critical sysPrxForUser bridges (ppu_context ABI). These must be REAL for the
+ * boot to make progress: TLS setup, and especially real PPU threads so the
+ * main thread's worker-wait loop is actually satisfied.
+ *
+ * Bridges return int64_t and set r3 themselves (matching nid_dispatch, which
+ * adapts via hle_fn — see register block). Thread create/exit delegate to the
+ * runtime's real implementations (sys_ppu_thread.c); the entry OPD they receive
+ * is resolved by ps3_thread_entry when the host thread starts.
+ * ===========================================================================*/
+extern "C" int64_t sys_ppu_thread_create(ppu_context* ctx);   /* runtime */
+extern "C" int64_t sys_ppu_thread_exit(ppu_context* ctx);     /* runtime */
+
+static void bridge_sys_initialize_tls(ppu_context* ctx)
+{
+    /* Real ABI: sys_initialize_tls(u64 thread_id, u32 tls_addr, u32 filesz,
+     * u32 memsz) — r3 is the thread_id, NOT the template address. Rather than
+     * trust the args, drive from the ELF's PT_TLS (authoritative + fixed). */
+    static uint32_t s_tls_next = 0x0F000000;   /* per-thread guest TLS arena */
+    const uint32_t filesz = DUCK_TLS_FILESZ;
+    const uint32_t memsz  = DUCK_TLS_MEMSZ;
+
+    uint32_t base = (s_tls_next + 0xF) & ~0xFu;
+    memcpy(vm_base + base, vm_base + DUCK_TLS_VADDR, filesz);
+    if (memsz > filesz) memset(vm_base + base + filesz, 0, memsz - filesz);
+    s_tls_next = base + 0x8000 + memsz;        /* 0x7000 TP bias + headroom */
+
+    ctx->gpr[13] = base + 0x7000;              /* PPC64 TLS ABI: r13 = tls + 0x7000 */
+    fprintf(stderr, "[HLE] sys_initialize_tls(r3=0x%llX r4=0x%llX r5=0x%llX) -> tls=0x%08X r13=0x%llX\n",
+            (unsigned long long)ctx->gpr[3], (unsigned long long)ctx->gpr[4],
+            (unsigned long long)ctx->gpr[5], base, (unsigned long long)ctx->gpr[13]);
+    ctx->gpr[3] = 0;
+}
+
+static void bridge_sys_ppu_thread_create(ppu_context* ctx)
+{
+    fprintf(stderr, "[HLE] sys_ppu_thread_create(entry=0x%llX arg=0x%llX prio=%d stack=0x%X)\n",
+            (unsigned long long)ctx->gpr[4], (unsigned long long)ctx->gpr[5],
+            (int32_t)ctx->gpr[6], (uint32_t)ctx->gpr[7]);
+    ctx->gpr[3] = (uint64_t)sys_ppu_thread_create(ctx);   /* runtime spawns host thread */
+}
+
+static void bridge_sys_ppu_thread_exit(ppu_context* ctx)
+{
+    ctx->gpr[3] = (uint64_t)sys_ppu_thread_exit(ctx);
+}
+
+static void bridge_sys_ppu_thread_get_id(ppu_context* ctx)
+{
+    uint32_t ptr = (uint32_t)ctx->gpr[3];
+    if (ptr) vm_write64(ptr, ctx->thread_id ? ctx->thread_id : 0x10000);
+    ctx->gpr[3] = 0;
+}
+
+static void bridge_sys_time_get_system_time(ppu_context* ctx)
+{
+    /* Monotonic microseconds, advanced ~1 frame per call so timeouts make
+     * progress. (Real wall-clock can come later if pacing matters.) */
+    static uint64_t t = 1000000;
+    t += 16667;
+    ctx->gpr[3] = t;
+}
 
 /* ---------------------------------------------------------------------------
  * Generic stub: log the first few calls per NID, hand back CELL_OK.
@@ -82,11 +151,24 @@ extern "C" void hle_import_trampoline(void* vctx)
  * -----------------------------------------------------------------------*/
 static ps3_module mod_duck;
 
+static void reg(const char* name, void* fn)
+{
+    ps3_nid_table_add(&mod_duck.func_table, ps3_compute_nid(name), name, fn);
+}
+
 extern "C" void duck_register_hle_modules(void)
 {
     ps3_module_init(&mod_duck, "duck_hle");
-    /* (bridges registered here as we iterate) */
+
+    /* Minimum for the boot to advance past its worker-wait spin: TLS + real
+     * PPU threads + a moving clock. Everything else still hits the log stub. */
+    reg("sys_initialize_tls",       (void*)bridge_sys_initialize_tls);
+    reg("sys_ppu_thread_create",    (void*)bridge_sys_ppu_thread_create);
+    reg("sys_ppu_thread_exit",      (void*)bridge_sys_ppu_thread_exit);
+    reg("sys_ppu_thread_get_id",    (void*)bridge_sys_ppu_thread_get_id);
+    reg("sys_time_get_system_time", (void*)bridge_sys_time_get_system_time);
+
     ps3_module_load(&mod_duck);
     ps3_register_module(&mod_duck);
-    fprintf(stderr, "[HLE] module table ready (0 bridges — all imports stubbed)\n");
+    fprintf(stderr, "[HLE] module table ready (5 real bridges)\n");
 }

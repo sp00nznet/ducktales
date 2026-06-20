@@ -87,6 +87,25 @@ extern "C" void dispatch_register_external(uint32_t addr, void (*fn)(void*)) {
     dispatch_put(addr, fn);
 }
 
+/* Resolve a host RIP to the nearest guest function at/below it (linear scan of
+ * function_table). Used by the watchdog to report where a thread is spinning.
+ * Returns the function name and, via out_guest, its guest address; nullptr if
+ * the RIP is further than 256 KB from any function (i.e. not in lifted code). */
+extern "C" const char* duck_resolve_host_rip(void* rip, uint32_t* out_guest) {
+    uintptr_t target = (uintptr_t)rip;
+    const char* best = nullptr; uint32_t best_addr = 0; uintptr_t best_d = (uintptr_t)-1;
+    for (uint64_t i = 0; i < function_table_count; i++) {
+        uintptr_t hf = (uintptr_t)function_table[i].func;
+        if (hf <= target) {
+            uintptr_t d = target - hf;
+            if (d < best_d) { best_d = d; best = function_table[i].name; best_addr = (uint32_t)function_table[i].addr; }
+        }
+    }
+    if (best_d > 0x40000) { if (out_guest) *out_guest = 0; return nullptr; }
+    if (out_guest) *out_guest = best_addr;
+    return best;
+}
+
 /* ---------------------------------------------------------------------------
  * Resolve a guest CTR target to a host function, following OPD / vtable
  * indirection up to a few levels (covers C++ virtual calls through objects).
