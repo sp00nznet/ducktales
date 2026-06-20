@@ -17,6 +17,7 @@
 #include <cstring>
 #ifdef _WIN32
 #include <windows.h>
+#include <tlhelp32.h>
 #endif
 
 extern "C" {
@@ -25,6 +26,15 @@ extern "C" {
     #include "runtime/syscalls/lv2_syscall_table.h"
     #include "runtime/syscalls/sys_ppu_thread.h"
 }
+
+/* Runtime event_flag handlers (sys_event.c) — re-registered at real-PS3 nums. */
+extern "C" int64_t sys_event_flag_create(ppu_context*);
+extern "C" int64_t sys_event_flag_destroy(ppu_context*);
+extern "C" int64_t sys_event_flag_wait(ppu_context*);
+extern "C" int64_t sys_event_flag_trywait(ppu_context*);
+extern "C" int64_t sys_event_flag_set(ppu_context*);
+extern "C" int64_t sys_event_flag_clear(ppu_context*);
+extern "C" int64_t sys_event_flag_get(ppu_context*);
 
 /* Runtime globals defined exactly once by the game project. */
 extern "C" uint8_t* vm_base = nullptr;
@@ -167,8 +177,36 @@ static DWORD WINAPI watchdog_proc(LPVOID)
                     (i + 1) * 2, (unsigned long long)(c.Rip - (uintptr_t)exe),
                     nm ? nm : "?", guest);
             if (guest == 0x009653C0 && dumped < 2) { dump_malloc_tree(); dump_guest_callchain(); dumped++; }
-            fflush(stderr);
         }
+        /* Every ~3rd tick, sample ALL other threads (to see the worker). */
+        if ((i % 3) == 2) {
+            DWORD me = GetCurrentThreadId(), mainTid = GetThreadId(g_main_thread);
+            HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+            if (snap != INVALID_HANDLE_VALUE) {
+                THREADENTRY32 te; te.dwSize = sizeof(te);
+                DWORD pid = GetCurrentProcessId();
+                if (Thread32First(snap, &te)) do {
+                    if (te.th32OwnerProcessID != pid) continue;
+                    if (te.th32ThreadID == me || te.th32ThreadID == mainTid) continue;
+                    HANDLE th = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME,
+                                           FALSE, te.th32ThreadID);
+                    if (!th) continue;
+                    CONTEXT tc; tc.ContextFlags = CONTEXT_CONTROL;
+                    SuspendThread(th);
+                    BOOL tok = GetThreadContext(th, &tc);
+                    ResumeThread(th);
+                    if (tok) {
+                        uint32_t g = 0;
+                        const char* n = duck_resolve_host_rip((void*)tc.Rip, &g);
+                        fprintf(stderr, "[watchdog]   thread %lu %s\n", te.th32ThreadID,
+                                n ? n : "(in runtime/system code — blocked/waiting)");
+                    }
+                    CloseHandle(th);
+                } while (Thread32Next(snap, &te));
+                CloseHandle(snap);
+            }
+        }
+        fflush(stderr);
     }
     return 0;
 }
@@ -221,6 +259,21 @@ int main(int argc, char* argv[])
 
     lv2_syscall_table_init(&g_lv2_syscalls);
     lv2_register_all_syscalls(&g_lv2_syscalls);
+
+    /* The runtime registers sys_event_flag at its own numbers (139-146), but
+     * DuckTales uses the real-PS3 LV2 numbers (82-89). The handler functions
+     * are correct (real blocking via condvar) — just re-register them at the
+     * numbers the game actually issues. Semaphore (90-94) already matches. */
+    {
+        g_lv2_syscalls.handlers[82] = sys_event_flag_create;   /* 0x52 */
+        g_lv2_syscalls.handlers[83] = sys_event_flag_destroy;  /* 0x53 */
+        g_lv2_syscalls.handlers[84] = sys_event_flag_wait;     /* 0x54 */
+        g_lv2_syscalls.handlers[85] = sys_event_flag_trywait;  /* 0x55 */
+        g_lv2_syscalls.handlers[86] = sys_event_flag_set;      /* 0x56 */
+        g_lv2_syscalls.handlers[87] = sys_event_flag_clear;    /* 0x57 */
+        g_lv2_syscalls.handlers[89] = sys_event_flag_get;      /* 0x59 */
+        fprintf(stderr, "[init] event_flag syscalls re-registered at 82-89\n");
+    }
 
     duck_register_hle_modules();
 

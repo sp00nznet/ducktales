@@ -60,18 +60,10 @@ extern "C" void lv2_syscall(ppu_context* ctx)
 {
     uint32_t num = (uint32_t)ctx->gpr[11];
 
-    /* Syscalls 85 (sys_event_flag_wait: id,bitptn,mode,result,timeout) and 118
-     * (a 2-arg event-flag op) are the message-pump's wait primitives that the
-     * runtime doesn't map. Returning CELL_OK makes the wait succeed
-     * (event treated as signaled) so the pump loop progresses instead of
-     * spinning on ENOSYS. For event_flag_wait, also write the matched bits to
-     * the result ptr (r6) when provided. */
-    if (num == 85) {
-        uint32_t result_ptr = (uint32_t)ctx->gpr[6];
-        if (result_ptr) { extern void vm_write64(uint64_t, uint64_t); vm_write64(result_ptr, ctx->gpr[4]); }
-        ctx->gpr[3] = 0;
-        return;
-    }
+    /* Syscall 118 (0x76) is a 2-arg op the runtime doesn't map and that isn't
+     * in the event_flag block; benign CELL_OK keeps the pump from spinning on
+     * ENOSYS. (Event_flag 82-89 are now registered in the syscall table and
+     * dispatch to the runtime's real blocking implementation.) */
     if (num == 118) { ctx->gpr[3] = 0; return; }
 
     if (num >= 1024) {

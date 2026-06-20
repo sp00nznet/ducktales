@@ -100,6 +100,19 @@ cmake --build build -j 6
 
 ## 📜 Changelog
 
+### v0.1.6 — "Real Sync" (2026-06-20)
+- 🔁 **Real `sys_event_flag`** — the runtime's (blocking) handlers were
+  registered at the wrong syscall numbers (139-146); re-registered them at the
+  real-PS3 numbers the game uses (82-89). Replaced the 85/118 success-hack.
+- 🔒 **Real `sys_lwmutex`** — host `CRITICAL_SECTION` registry keyed by the guest
+  lwmutex address (recursive, blocking), instead of no-op stubs.
+- 🔭 All-thread watchdog: samples every thread, not just the main one.
+- 🧩 Revealed the next frontier: a **multi-thread coordination deadlock** — 4
+  worker threads (TmpMsgPump + SPURS/net) block on event_flag waits while the
+  main thread spins on a lwcond wait (syscall 118). The producer/consumer graph
+  needs full sync semantics (lwcond wait/signal) + understanding which thread
+  must make progress first.
+
 ### v0.1.5 — "Past the Wall" (2026-06-20)
 - 🧱➡️ The TOC fix got the boot **through the CRT heap phase** — it no longer
   spins in `malloc`; it reaches the message-pump / thread-coordination phase.

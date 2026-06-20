@@ -18,6 +18,9 @@
 #include "config.h"
 #include <cstdio>
 #include <cstring>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 extern "C" uint32_t    duck_import_nid_for_sentinel(uint32_t sentinel);
 extern "C" const char* duck_import_name_for_sentinel(uint32_t sentinel);
@@ -93,6 +96,70 @@ static void bridge_sys_time_get_system_time(ppu_context* ctx)
     t += 16667;
     ctx->gpr[3] = t;
 }
+
+/* ---------------------------------------------------------------------------
+ * sys_lwmutex — real mutual exclusion via a host CRITICAL_SECTION keyed by the
+ * guest lwmutex address. The no-op stubs gave no real synchronization between
+ * the main thread and worker threads (e.g. TmpMsgPump), so producer/consumer
+ * handoffs never coordinated. CRITICAL_SECTION is recursive (matches PS3
+ * recursive lwmutex) and EnterCriticalSection blocks until acquired.
+ * -----------------------------------------------------------------------*/
+#ifdef _WIN32
+struct LwMutex { uint32_t addr; CRITICAL_SECTION cs; };
+static LwMutex      g_lwm[512];
+static int          g_lwm_count = 0;
+static CRITICAL_SECTION g_lwm_registry_lock;
+static bool         g_lwm_registry_init = false;
+
+static CRITICAL_SECTION* lwm_get(uint32_t addr, bool create)
+{
+    if (!g_lwm_registry_init) { InitializeCriticalSection(&g_lwm_registry_lock); g_lwm_registry_init = true; }
+    EnterCriticalSection(&g_lwm_registry_lock);
+    CRITICAL_SECTION* found = nullptr;
+    for (int i = 0; i < g_lwm_count; i++)
+        if (g_lwm[i].addr == addr) { found = &g_lwm[i].cs; break; }
+    if (!found && create && g_lwm_count < 512) {
+        LwMutex* m = &g_lwm[g_lwm_count++];
+        m->addr = addr;
+        InitializeCriticalSection(&m->cs);
+        found = &m->cs;
+    }
+    LeaveCriticalSection(&g_lwm_registry_lock);
+    return found;
+}
+
+static void bridge_sys_lwmutex_create(ppu_context* ctx)
+{
+    uint32_t addr = (uint32_t)ctx->gpr[3];
+    if (addr) lwm_get(addr, true);
+    ctx->gpr[3] = 0;
+}
+static void bridge_sys_lwmutex_lock(ppu_context* ctx)
+{
+    uint32_t addr = (uint32_t)ctx->gpr[3];
+    CRITICAL_SECTION* cs = lwm_get(addr, true);  /* lazy-create if unseen */
+    if (cs) EnterCriticalSection(cs);
+    ctx->gpr[3] = 0;
+}
+static void bridge_sys_lwmutex_trylock(ppu_context* ctx)
+{
+    uint32_t addr = (uint32_t)ctx->gpr[3];
+    CRITICAL_SECTION* cs = lwm_get(addr, true);
+    bool ok = cs && TryEnterCriticalSection(cs);
+    ctx->gpr[3] = ok ? 0 : (uint64_t)(int64_t)(int32_t)0x80010005; /* EBUSY */
+}
+static void bridge_sys_lwmutex_unlock(ppu_context* ctx)
+{
+    uint32_t addr = (uint32_t)ctx->gpr[3];
+    CRITICAL_SECTION* cs = lwm_get(addr, false);
+    if (cs) LeaveCriticalSection(cs);
+    ctx->gpr[3] = 0;
+}
+static void bridge_sys_lwmutex_destroy(ppu_context* ctx)
+{
+    ctx->gpr[3] = 0;   /* leave the CS allocated; cheap and avoids races */
+}
+#endif
 
 /* ---------------------------------------------------------------------------
  * cellGame — boot/content checks. cellGameBootCheck writes type/attributes/
@@ -211,6 +278,16 @@ extern "C" void duck_register_hle_modules(void)
     /* cellGame — real boot-check values so the CRT init reaches heap creation. */
     reg("cellGameBootCheck",        (void*)bridge_cellGameBootCheck);
     reg("cellGameContentPermit",    (void*)bridge_cellGameContentPermit);
+
+#ifdef _WIN32
+    /* Real lwmutex (host CRITICAL_SECTION) so the main thread and worker
+     * threads actually synchronize. */
+    reg("sys_lwmutex_create",       (void*)bridge_sys_lwmutex_create);
+    reg("sys_lwmutex_lock",         (void*)bridge_sys_lwmutex_lock);
+    reg("sys_lwmutex_trylock",      (void*)bridge_sys_lwmutex_trylock);
+    reg("sys_lwmutex_unlock",       (void*)bridge_sys_lwmutex_unlock);
+    reg("sys_lwmutex_destroy",      (void*)bridge_sys_lwmutex_destroy);
+#endif
 
     ps3_module_load(&mod_duck);
     ps3_register_module(&mod_duck);
