@@ -1,0 +1,16 @@
+[
+ {
+  "vaddr": "0x10000",
+  "filesz": "0xcdb9e8",
+  "memsz": "0xcdb9e8",
+  "flags": 4194309,
+  "file_offset": "0x0"
+ },
+ {
+  "vaddr": "0xcf0000",
+  "filesz": "0xb4580",
+  "memsz": "0x355808",
+  "flags": 6291462,
+  "file_offset": "0xce0000"
+ }
+]

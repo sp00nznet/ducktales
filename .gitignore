@@ -1,0 +1,33 @@
+# ---------------------------------------------------------------------------
+# Generated recompiler output — ~2 GB of lifted C++ (50,077 functions across
+# 49 chunks). Regenerate locally with tools/ppu_lifter.py. NEVER commit.
+# ---------------------------------------------------------------------------
+src/recomp/
+
+# Build artifacts (~3 GB) + the 1.6 GB native executable
+build/
+*.exe
+*.obj
+*.ilk
+*.pdb
+
+# Copyrighted game data — bring your own dumped + decrypted EBOOT.
+# Place EBOOT.elf (and assets) under game/. Do NOT commit.
+game/
+
+# SPU side-products / extraction scratch
+spu_extract/
+
+# Run + build logs
+*.log
+run*.out.log
+run*.err.log
+imports.err
+lift.log
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

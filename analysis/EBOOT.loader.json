@@ -1,0 +1,12 @@
+{
+ "entry_opd": "0xcfc1b8",
+ "entry_code": "0x251f98",
+ "entry_toc": "0xd20038",
+ "module_toc": "0xd20038",
+ "opd_base": "0xcf3b08",
+ "opd_size": "0x24530",
+ "opd_count": 18598,
+ "function_count": 18598,
+ "e_type": 2,
+ "load_segments": 2
+}
