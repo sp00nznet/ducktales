@@ -100,6 +100,18 @@ cmake --build build -j 6
 
 ## 📜 Changelog
 
+### v0.1.5 — "Past the Wall" (2026-06-20)
+- 🧱➡️ The TOC fix got the boot **through the CRT heap phase** — it no longer
+  spins in `malloc`; it reaches the message-pump / thread-coordination phase.
+- 🧵 The boot now spawns the **`TmpMsgPump`** worker thread and reaches
+  `cellSysutilCheckCallback` (the main-loop sysutil hook).
+- 🩹 Pragmatic stub for syscalls **85** (`sys_event_flag_wait`) and **118**
+  (event-flag op) — they were `ENOSYS` and the pump spun on them (5,240 calls).
+  Returning success unblocks the wait. (Proper event-flag semantics later — for
+  now the worker/main coordination is hand-waved.)
+- 🔜 Next: a CRT coordination loop (`func_00270EA8`/`func_002716C8`/`func_00271870`)
+  + two one-time `ENOSYS` syscalls (82, 872). Then: graphics (RSX).
+
 ### v0.1.4 — "TOC Talk" (2026-06-20)
 - 🎯 **Landmark fix: TOC (`r2`) corruption in `nid_dispatch`.** The lifted import
   thunk already saves the caller's `r2` to `sp+0x28` before setting `r2 = OPD.toc`
