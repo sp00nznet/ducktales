@@ -100,6 +100,19 @@ cmake --build build -j 6
 
 ## 📜 Changelog
 
+### v0.1.4 — "TOC Talk" (2026-06-20)
+- 🎯 **Landmark fix: TOC (`r2`) corruption in `nid_dispatch`.** The lifted import
+  thunk already saves the caller's `r2` to `sp+0x28` before setting `r2 = OPD.toc`
+  and calling us — but `nid_dispatch` then re-saved `r2` (now the synthetic OPD
+  toc = **0**) to the same slot, so the thunk restored `r2 = 0`. Every HLE import
+  was zeroing the caller's TOC. Removed the redundant save; the lifted code owns
+  TOC management. This is a general fix affecting *all* import calls.
+- With TOC preserved, the CRT heap-init now reads the correct mspace base
+  (`*(0xD1B174) = 0x101D918`) and reaches `create_mspace` with valid arguments.
+- 🔜 Next layer: `create_mspace` (`func_00966AF8`) still returns 0 — its internal
+  `mspace_malloc` (`func_00964F88`) fails because the mspace's initial memory
+  isn't acquired (the `sys_memory_allocate` path inside create isn't taken yet).
+
 ### v0.1.3 — "Oracle" (2026-06-20)
 - 🔮 Booted the same EBOOT in **RPCS3** (the oracle) and mapped the real heap
   bring-up: the CRT heap is created via `sys_memory_allocate(size=0x200000)` then

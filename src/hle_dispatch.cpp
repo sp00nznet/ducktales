@@ -157,16 +157,15 @@ extern "C" void vm_write64(uint64_t addr, uint64_t val);
 
 static void nid_dispatch(ppu_context* ctx, uint32_t nid, const char* name)
 {
-    /* PPC64 ELF ABI: caller restores r2 from sp+0x28 after an inter-module
-     * call. The lifted stub doesn't emit the save, so do it here. */
-    uint64_t saved_toc = ctx->gpr[2];
-    vm_write64((uint32_t)ctx->gpr[1] + 0x28, saved_toc);
-
+    /* TOC (r2) is fully managed by the lifted import thunk: it saves the
+     * caller's r2 to sp+0x28 BEFORE setting r2 = OPD.toc and invoking us, then
+     * restores r2 from sp+0x28 afterwards. We must NOT touch r2 or sp+0x28 — by
+     * the time we run, r2 is already the (synthetic, 0) OPD toc, so saving it
+     * would clobber the thunk's correct save with 0 and zero out the caller's
+     * TOC. The HLE handler is host code and never needs r2. */
     hle_fn fn = (hle_fn)ps3_resolve_func_nid(nid);
     if (fn) fn(ctx);
     else    hle_log_stub(ctx, nid, name);
-
-    ctx->gpr[2] = saved_toc;
 }
 
 /* Entry point all import sentinels resolve to (registered in import_table). */
