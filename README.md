@@ -100,6 +100,19 @@ cmake --build build -j 6
 
 ## 📜 Changelog
 
+### v0.1.2 — "Shift Happens" (2026-06-20)
+- 🐛 **Lifter bug fixed (`slw`/`srw`/`sraw`):** the 32-bit shift-word ops emitted
+  `(uint32_t)x << (n & 0x3F)`, but PPC produces 0 when the shift ≥ 32. C `<< n`
+  is UB for n≥32 and x86 masks the count to 5 bits → a wrong *nonzero* result.
+  This breaks any code that shifts a mask to zero to terminate a loop. Fixed in
+  `ppu_lifter.py`; existing output patched by `tools/fix_shift_word.py` (2,582
+  sites). The 64-bit `sld`/`srd` were already correct — only the 32-bit forms
+  were wrong.
+- 🔬 Diagnosed the current wall: the CRT `malloc` (`func_009653C0`) is a
+  dlmalloc tree-bin search spinning on a non-empty treebin with cyclic child
+  pointers → the allocator **arena was never zero-initialized**. CRT heap
+  bring-up is the active frontier.
+
 ### v0.1.1 — "Constructors & Threads" (2026-06-20)
 - 🧵 Real `sys_ppu_thread_create`/`exit` (delegate to the runtime; entry OPD
   resolved by the thread trampoline) + a moving `sys_time_get_system_time`.
